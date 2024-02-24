@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 #[derive(Deserialize, Debug, Clone, PartialEq, Hash, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Package {
+    id: String,
     pub list: UadList,
     pub description: String,
     dependencies: Vec<String>,
@@ -178,11 +179,11 @@ impl std::fmt::Display for Removal {
     }
 }
 
-pub type PackageHashMap = HashMap<String, Package>;
+type PackageHashMap = HashMap<String, Package>;
 pub fn load_debloat_lists(remote: bool) -> (Result<PackageHashMap, PackageHashMap>, bool) {
     let cached_uad_lists: PathBuf = CACHE_DIR.join("uad_lists.json");
     let mut error = false;
-    let list: PackageHashMap = if remote {
+    let list: Vec<Package> = if remote {
         retry(Fixed::from_millis(1000).take(60), || {
             match ureq::get(
                 "https://raw.githubusercontent.com/Universal-Debloater-Alliance/universal-android-debloater/\
@@ -193,29 +194,36 @@ pub fn load_debloat_lists(remote: bool) -> (Result<PackageHashMap, PackageHashMa
                 Ok(data) => {
                     let text = data.into_string().expect("response should be Ok type");
                     fs::write(cached_uad_lists.clone(), &text).expect("Unable to write file");
-                    let list: PackageHashMap = serde_json::from_str(&text).expect("Unable to parse");
+                    let list = serde_json::from_str(&text).expect("Unable to parse");
                     OperationResult::Ok(list)
                 }
                 Err(e) => {
                     warn!("Could not load remote debloat list: {}", e);
                     error = true;
-                    OperationResult::Retry(PackageHashMap::new())
+                    OperationResult::Retry(Vec::<Package>::new())
                 }
             }
         })
-        .unwrap_or_else(|_| get_local_lists())
+        .map_or_else(|_| get_local_lists(), |list| list)
     } else {
         warn!("Could not load remote debloat list");
         get_local_lists()
     };
+
+    // TODO: Do it without intermediary Vec?
+    let mut package_lists = HashMap::new();
+    for p in list {
+        let name = p.id.clone();
+        package_lists.insert(name, p);
+    }
     if error {
-        (Err(list), remote)
+        (Err(package_lists), remote)
     } else {
-        (Ok(list), remote)
+        (Ok(package_lists), remote)
     }
 }
 
-fn get_local_lists() -> PackageHashMap {
+fn get_local_lists() -> Vec<Package> {
     const DATA: &str = include_str!("../../resources/assets/uad_lists.json");
     let cached_uad_lists = CACHE_DIR.join("uad_lists.json");
 
@@ -233,6 +241,6 @@ mod tests {
     #[test]
     fn test_parse_json() {
         const DATA: &str = include_str!("../../resources/assets/uad_lists.json");
-        let _: PackageHashMap = serde_json::from_str(DATA).expect("Unable to parse");
+        let _: Vec<Package> = serde_json::from_str(DATA).expect("Unable to parse");
     }
 }
